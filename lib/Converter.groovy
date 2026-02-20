@@ -63,6 +63,8 @@ class Converter {
                 result = copyAsciidoc(template, outputDir)
             } else if (format == 'docbook') {
                 result = convertToDocBook(template, outputDir, false)
+            } else if (isMultiPage(format)) {
+                result = convertViaPandocMP(template, format, outputDir)
             } else {
                 // All other formats go through DocBook + Pandoc
                 result = convertViaPandoc(template, format, outputDir)
@@ -145,10 +147,11 @@ class Converter {
     String convertViaPandoc(Map template, String format, String outputDir) {
         def language = template.language
 
-        // First generate DocBook
-        def docbookDir = "${projectRoot.path}/build/${language}/docbook/${template.style}"
+        // Derive docbook intermediate dir from outputDir (same base, 'docbook' format segment)
+        def docbookRelDir = outputDir.replaceFirst("/${format}/", "/docbook/")
+        def docbookDir = new File(projectRoot, docbookRelDir).canonicalFile.absolutePath
         new File(docbookDir).mkdirs()
-        def docbookFile = convertToDocBook(template, docbookDir.replace(projectRoot.path + '/', ''), false)
+        def docbookFile = convertToDocBook(template, docbookRelDir, false)
 
         // Copy images to DocBook directory so Pandoc can find them
         if (template.hasImages) {
@@ -275,8 +278,8 @@ class Converter {
 
         def sourceImagesDir = new File(template.imagesDir)
 
-        // mkdocs uses docs/images, others use images
-        def targetImagesPath = (format == 'mkdocs') ? "${outputDir}/docs/images" : "${outputDir}/images"
+        // mkdocs/mkdocsMP use docs/images, others use images
+        def targetImagesPath = (format in ['mkdocs', 'mkdocsMP']) ? "${outputDir}/docs/images" : "${outputDir}/images"
         def targetImagesDir = new File(projectRoot, targetImagesPath)
         targetImagesDir.mkdirs()
 
@@ -289,6 +292,62 @@ class Converter {
                 targetFile.bytes = file.bytes
             }
         }
+    }
+
+    /** Returns true for formats that produce one output file per chapter */
+    boolean isMultiPage(String format) {
+        return format in ['markdownMP', 'mkdocsMP', 'markdownMPStrict', 'gitHubMarkdownMP']
+    }
+
+    // Convert each individual chapter .adoc to a separate DocBook XML (multi-page step 1)
+    void convertToDocBookMP(Map template, String docbookMPRelDir) {
+        def outDir = new File(projectRoot, docbookMPRelDir).canonicalFile
+        outDir.mkdirs()
+        def attrs = createAttributes(template)
+        def baseDir = new File(template.srcDir).canonicalFile
+        new File(template.srcDir).eachFile { f ->
+            if (!f.name.endsWith('.adoc') || f.name in ['arc42-template.adoc', 'config.adoc']) return
+            def opts = Options.builder().toFile(new File(outDir, f.name.replace('.adoc', '.xml')))
+                .backend('docbook').safe(SafeMode.UNSAFE).baseDir(baseDir).mkDirs(true)
+                .attributes(attrs).build()
+            try { asciidoctor.convertFile(f, opts) } catch (Exception e) { /* skip config-only files */ }
+        }
+    }
+
+    // Convert to multi-page output: one file per chapter via per-chapter DocBook XML + Pandoc
+    String convertViaPandocMP(Map template, String format, String outputDir) {
+        def docbookMPRelDir = outputDir.replaceFirst("/${format}/", "/docbookMP/")
+        def docbookMPDir = new File(projectRoot, docbookMPRelDir).canonicalFile
+        docbookMPDir.mkdirs()
+        convertToDocBookMP(template, docbookMPRelDir)
+
+        if (template.hasImages) {
+            def src = new File(template.imagesDir)
+            def tgt = new File(docbookMPDir, 'images')
+            tgt.mkdirs()
+            src.eachFileRecurse { f ->
+                if (f.isFile()) { def t = new File(tgt, f.absolutePath - src.absolutePath); t.parentFile.mkdirs(); t.bytes = f.bytes }
+            }
+        }
+
+        def formatConfig = getPandocConfig(format)
+        def outputFileDir = new File(projectRoot, outputDir).canonicalFile
+        outputFileDir.mkdirs()
+
+        docbookMPDir.listFiles((FilenameFilter) { dir, name -> name.endsWith('.xml') })?.sort { it.name }?.each { xmlFile ->
+            def outFile = new File(outputFileDir, xmlFile.name.replace('.xml', ".${formatConfig.extension}"))
+            def args = ['pandoc', '-r', 'docbook', '-t', formatConfig.pandocFormat, '-o', outFile.absolutePath, xmlFile.name]
+            if (formatConfig.args) args.addAll(formatConfig.args)
+            def pb = new ProcessBuilder(args)
+            pb.directory(docbookMPDir)
+            pb.environment().putAll([LC_ALL: 'en_US.UTF-8', LANG: 'en_US.UTF-8'])
+            def proc = pb.start(); proc.waitFor()
+            if (proc.exitValue() != 0) println "  ⚠ Pandoc failed for ${xmlFile.name}: ${proc.err.text}"
+        }
+
+        if (format == 'mkdocsMP') ['config.md', 'about-arc42.md'].each { new File(outputFileDir, it).delete() }
+
+        return outputFileDir.absolutePath
     }
 
     /**

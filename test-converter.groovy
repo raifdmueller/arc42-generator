@@ -3,6 +3,8 @@
 /**
  * Test script for Converter.groovy
  * Tests format conversion with AsciidoctorJ and Pandoc
+ *
+ * Uses 'build2/test/' as output dir to avoid the root-owned 'build/' directory.
  */
 
 // Load buildconfig.groovy
@@ -31,7 +33,7 @@ try {
     println "Converting EN:plain to HTML..."
     println "  Template source: ${enPlain.sourcePath}"
     println "  Main file: ${enPlain.mainFile}"
-    def htmlResult = converter.convertToHTML(enPlain, 'build/test/EN/html/plain')
+    def htmlResult = converter.convertToHTML(enPlain, 'build2/test/EN/html/plain')
     println "  Result: ${htmlResult}"
     assert htmlResult != null, "HTML conversion should succeed"
     def htmlFile = new File(htmlResult)
@@ -48,7 +50,7 @@ try {
 
     println "=== Test 3: Convert Single Template to DocBook ==="
     println "Converting EN:plain to DocBook..."
-    def docbookResult = converter.convertToDocBook(enPlain, 'build/test/EN/docbook/plain', false)
+    def docbookResult = converter.convertToDocBook(enPlain, 'build2/test/EN/docbook/plain', false)
     assert docbookResult != null, "DocBook conversion should succeed"
     assert new File(docbookResult).exists(), "DocBook file should exist"
     println "✓ DocBook file created: ${docbookResult}"
@@ -63,7 +65,7 @@ try {
 
         println "\n=== Test 5: Convert via Pandoc (Markdown) ==="
         println "Converting EN:plain to Markdown..."
-        def markdownResult = converter.convertViaPandoc(enPlain, 'markdown', 'build/test/EN/markdown/plain')
+        def markdownResult = converter.convertViaPandoc(enPlain, 'markdown', 'build2/test/EN/markdown/plain')
         assert markdownResult != null, "Markdown conversion should succeed"
         assert new File(markdownResult).exists(), "Markdown file should exist"
         println "✓ Markdown file created: ${markdownResult}"
@@ -71,11 +73,25 @@ try {
 
         println "=== Test 6: Convert via Pandoc (DOCX) ==="
         println "Converting EN:plain to DOCX..."
-        def docxResult = converter.convertViaPandoc(enPlain, 'docx', 'build/test/EN/docx/plain')
+        def docxResult = converter.convertViaPandoc(enPlain, 'docx', 'build2/test/EN/docx/plain')
         assert docxResult != null, "DOCX conversion should succeed"
         assert new File(docxResult).exists(), "DOCX file should exist"
         println "✓ DOCX file created: ${docxResult}"
         println "✓ Test 6 passed\n"
+
+        println "=== Test 8: Convert via Pandoc (markdownMP - multi-page) ==="
+        println "Converting EN:plain to markdownMP..."
+        def markdownMPResult = converter.convertViaPandocMP(enPlain, 'markdownMP', 'build2/test/EN/markdownMP/plain')
+        assert markdownMPResult != null, "markdownMP conversion should succeed"
+        def markdownMPDir = new File(markdownMPResult)
+        assert markdownMPDir.exists(), "markdownMP output directory should exist"
+        def mdFiles = markdownMPDir.listFiles((FilenameFilter) { dir, name -> name.endsWith('.md') })?.sort { it.name }
+        assert mdFiles != null && mdFiles.size() > 1,
+            "markdownMP should produce multiple .md files (one per chapter), got: ${mdFiles?.size()}"
+        println "✓ markdownMP produced ${mdFiles.size()} .md files:"
+        mdFiles.each { f -> println "  - ${f.name}" }
+        println "✓ Test 8 passed\n"
+
     } else {
         println "⚠ Pandoc not available, skipping Pandoc tests"
     }
